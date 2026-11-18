@@ -89,8 +89,18 @@
     ["Loan register", "book-open"],
     ["Desk book", "messages-square"],
   ];
+  // Minutes since Friday midnight, so a slip can be judged late against desk time.
+  const dueAt = {
+    "Fri 8 pm": 1200,
+    "Sat 9 am": 1980,
+    "Sat 10 am": 2040,
+    "Sat noon": 2160,
+  };
+  const phaseAt = [945, 1170, 1980];
   const original = () => ({
     version: 1,
+    checkin: null,
+    holderEdit: 0,
     tab: "Requests",
     phase: 0,
     selected: "",
@@ -156,8 +166,24 @@
     "</small></div><div>" +
     right +
     "</div></div>";
-  const badge = (t, good = false) =>
-    '<span class="tag' + (good ? " good" : "") + '">' + esc(t) + "</span>";
+  const badge = (t, tone = "") =>
+    '<span class="tag' + (tone ? " " + tone : "") + '">' + esc(t) + "</span>";
+  const loanBadge = (l) => {
+    if (l.back) return badge("Returned");
+    const now = phaseAt[s.phase];
+    if (now <= dueAt[l.due]) return badge("Out");
+    if (l.expected && now <= dueAt[l.expected])
+      return badge("Late · expected " + l.expected, "warn");
+    return badge("Overdue", "bad");
+  };
+  const select = (label, key, options) =>
+    "<label><span>" +
+    label +
+    '</span><select name="' +
+    key +
+    '" required><option value="">Select…</option>' +
+    opts(options) +
+    "</select></label>";
   function requestPage() {
     let html = head(
       "Approved requests",
@@ -215,7 +241,7 @@
       html += row(
         a.id + " · " + a.type,
         a.model + " · " + a.bin,
-        badge(status, status === "On shelf"),
+        badge(status, status === "On shelf" ? "good" : ""),
       );
     }
     return html;
@@ -230,14 +256,6 @@
     );
     if (s.editing) {
       const available = assets.filter((a) => !a.repair && !out(a.id));
-      const select = (label, key, options) =>
-        "<label><span>" +
-        label +
-        '</span><select name="' +
-        key +
-        '" required><option value="">Select…</option>' +
-        opts(options) +
-        "</select></label>";
       return (
         html +
         '<form data-issue><div class="form">' +
@@ -264,6 +282,7 @@
         '</div><button type="submit" class="primary">Save issue slip</button></form>'
       );
     }
+    html += checkinPanel();
     html +=
       '<div class="buttons">' +
       ["Outstanding", "All slips"]
@@ -284,15 +303,69 @@
       .slice()
       .reverse();
     if (!shown.length) html += "<p>No outstanding slips.</p>";
-    for (const l of shown)
+    for (const l of shown) {
+      // Only a partly returned kit can have a unit with someone other than the borrower.
+      const split =
+        !l.back && s.loans.some((x) => x.req === l.req && x.back);
       html += row(
-        "L-" + l.num + " · " + l.asset,
-        l.req + " · " + l.who + " · Due " + l.due,
-        l.back
-          ? badge("Returned")
-          : btn("Record return", "return", String(l.num)),
+        "L-" + l.num + " · " + l.asset + " · " + getAsset(l.asset).type,
+        l.req + " · " + l.who + " · Due " + l.due + holderText(l),
+        loanBadge(l) +
+          (split ? " " + btn("Update holder", "holder", String(l.num)) : ""),
       );
+      if (s.holderEdit === l.num)
+        html +=
+          '<form data-holder class="holderform"><div class="form">' +
+          select("Now with", "holder", people.map((p) => [p, p])) +
+          select(
+            "Expected back",
+            "expected",
+            Object.keys(dueAt).map((d) => [d, d]),
+          ) +
+          '</div><div class="buttons"><button type="submit" class="primary">Save to slip</button>' +
+          btn("Cancel", "holder", String(l.num)) +
+          "</div></form>";
+    }
     return html;
+  }
+  const holderText = (l) =>
+    l.holder && !l.back ? " · Now with " + l.holder + ", expected " + l.expected : "";
+  // A return starts from the tag on the unit in hand, never from a row in the list.
+  function checkinPanel() {
+    const c = s.checkin;
+    if (c && c.num) {
+      const l = s.loans.find((x) => x.num === c.num);
+      const a = getAsset(l.asset);
+      return (
+        '<div class="record confirm" data-confirm><small>Slip L-' +
+        l.num +
+        " · " +
+        esc(l.req) +
+        " · " +
+        esc(getReq(l.req).club) +
+        "</small><h3>" +
+        esc(a.id + " · " + a.type + " · " + a.model) +
+        "</h3><p>" +
+        esc("Issued to " + l.who + holderText(l) + " · Due " + l.due) +
+        " " +
+        loanBadge(l) +
+        "</p><p>Put it back in bin <b>" +
+        esc(a.bin) +
+        '</b>.</p><div class="buttons">' +
+        btn("Confirm return", "confirm", String(l.num), "primary") +
+        btn("Not this one", "uncheck") +
+        "</div></div>"
+      );
+    }
+    return (
+      '<form data-checkin class="record checkin"><div class="form"><label><span>Check in a returned unit: tag on the unit</span><input name="tag" placeholder="e.g. PR-04" autocomplete="off" required value="' +
+      esc((c && c.tag) || "") +
+      '"></label></div>' +
+      (c && c.error
+        ? '<p class="warnline" role="alert">' + esc(c.error) + "</p>"
+        : "") +
+      '<button type="submit">Find slip</button></form>'
+    );
   }
   function deskbook() {
     let html = head(
@@ -385,11 +458,20 @@
         break;
       case "advance":
         if (s.phase < 2) s.phase++;
+        s.checkin = null;
+        s.holderEdit = 0;
         s.notice = "Shift time updated.";
         break;
       case "tab":
         s.tab = v;
         s.editing = false;
+        s.holderEdit = 0;
+        break;
+      case "holder":
+        s.holderEdit = s.holderEdit === Number(v) ? 0 : Number(v);
+        break;
+      case "uncheck":
+        s.checkin = null;
         break;
       case "close":
         s.selected = "";
@@ -406,15 +488,23 @@
       case "scope":
         s.onlyOpen = v === "0";
         break;
-      case "return": {
+      case "confirm": {
         const l = s.loans.find((l) => l.num === Number(v));
-        if (!l || l.back) return;
+        if (!l || l.back || !s.checkin || s.checkin.num !== l.num) return;
         l.back = true;
-        s.notice = l.asset + " returned to stock. Slip L-" + l.num + " closed.";
+        s.checkin = null;
+        s.notice =
+          l.asset +
+          " returned to stock in bin " +
+          getAsset(l.asset).bin +
+          ". Slip L-" +
+          l.num +
+          " closed.";
         break;
       }
     }
     commit();
+    if (b.dataset.action === "confirm") q("[data-checkin] input").focus();
   });
   root.addEventListener("change", (e) => {
     if (e.target.matches("[data-filter]")) {
@@ -433,13 +523,55 @@
       commit("Handover note saved.");
       return;
     }
+    if (f.matches("[data-checkin]")) {
+      const tag = String(form.get("tag")).trim().toUpperCase();
+      const a = getAsset(tag);
+      const l = a && out(a.id);
+      let error = "";
+      if (!a) error = "No unit is tagged " + tag + ". Check the label.";
+      else if (a.repair)
+        error = a.id + " is a workshop unit and was never issued. Check the tag.";
+      else if (!l)
+        error =
+          a.id +
+          " (" +
+          a.model +
+          ") is not on any open slip. Check the tag before shelving it in bin " +
+          a.bin +
+          ".";
+      s.checkin = error ? { tag, error } : { tag, num: l.num };
+      commit(error ? "No open slip for that tag." : "Check the unit, then confirm.");
+      q(error ? "[data-checkin] input" : "[data-confirm] .primary").focus();
+      return;
+    }
+    if (f.matches("[data-holder]")) {
+      const l = s.loans.find((x) => x.num === s.holderEdit);
+      const [holder, expected] = [form.get("holder"), form.get("expected")];
+      if (!l || l.back || !people.includes(holder) || !dueAt[expected]) return;
+      if (dueAt[expected] < phaseAt[s.phase]) {
+        q("[data-status]").textContent =
+          "That time has already passed. Choose when it will actually be back.";
+        return;
+      }
+      Object.assign(l, { holder, expected });
+      s.holderEdit = 0;
+      commit("Slip L-" + l.num + ": " + l.asset + " is with " + holder + ".");
+      return;
+    }
     if (!f.matches("[data-issue]")) return;
     const [req, asset, who, due] = ["req", "asset", "who", "due"].map((k) =>
       form.get(k),
     );
     const unit = getAsset(asset),
       r = getReq(req);
-    if (!r || !unit || unit.repair || out(asset) || !people.includes(who))
+    if (
+      !r ||
+      !unit ||
+      unit.repair ||
+      out(asset) ||
+      !people.includes(who) ||
+      !dueAt[due]
+    )
       return;
     if (!r.items.includes(unit.type)) {
       q("[data-status]").textContent =
@@ -453,6 +585,11 @@
     ) {
       q("[data-status]").textContent =
         "The approved quantity of this equipment type is already on loan.";
+      return;
+    }
+    if (dueAt[due] > dueAt[r.due]) {
+      q("[data-status]").textContent =
+        "This request must be back by " + r.due + ". Choose that time or earlier.";
       return;
     }
     const num = Math.max(...s.loans.map((l) => l.num)) + 1;
@@ -475,7 +612,12 @@
       !d.loans.length ||
       !d.loans.every(
         (l) =>
-          l && getReq(l.req) && getAsset(l.asset) && Number.isInteger(l.num),
+          l &&
+          getReq(l.req) &&
+          getAsset(l.asset) &&
+          Number.isInteger(l.num) &&
+          dueAt[l.due] &&
+          (!l.holder || (people.includes(l.holder) && dueAt[l.expected])),
       )
     )
       return;
@@ -484,6 +626,8 @@
       ...d,
       loans: d.loans.map((l) => ({ ...l })),
       notes: d.notes.map((n) => ({ ...n })),
+      checkin: null,
+      holderEdit: 0,
     };
     paint();
   }

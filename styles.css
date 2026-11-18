@@ -38,6 +38,8 @@ body > main {
   --mark: light-dark(#bd502f, #f2a585);
   --ok: light-dark(#e3f1e8, #2d4838);
   --oktxt: light-dark(#25523d, #bedac8);
+  --late: light-dark(#fbe3d9, #4a2d24);
+  --latetxt: light-dark(#8a3218, #f5c3ad);
   background: var(--paper);
   color: var(--ink);
   font:
@@ -262,6 +264,34 @@ body > main {
 #campus-stores .good {
   background: var(--ok);
   color: var(--oktxt);
+}
+#campus-stores .warn {
+  background: var(--memo);
+  color: var(--memotxt);
+}
+#campus-stores .bad,
+#campus-stores .warnline {
+  background: var(--late);
+  color: var(--latetxt);
+  font-weight: 600;
+}
+#campus-stores .warnline {
+  padding: 7px 9px;
+  border-radius: 6px;
+  margin: 0 0 10px;
+}
+#campus-stores :is(.checkin, .confirm) {
+  margin: 0 0 14px;
+}
+#campus-stores .holderform {
+  margin-bottom: 10px;
+}
+#campus-stores .row > div:last-child {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 #campus-stores .record {
   margin-top: 14px;
